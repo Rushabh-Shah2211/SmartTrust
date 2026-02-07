@@ -4,6 +4,23 @@ import hashlib
 import json
 from datetime import datetime
 
+class DataStore:
+    """Centralized Store for Application State to ensure data integrity"""
+    def __init__(self):
+        self.ledger_data = []
+        self.ppe_data = []
+        self.fund_data = []
+        self.org_info = {}
+        self.last_sync = None
+
+    def sync_from_ui(self, mapping_list, ppe_list, fund_list, org_dict):
+        """Atomic update of all data states before generation"""
+        self.ledger_data = mapping_list
+        self.ppe_data = ppe_list
+        self.fund_data = fund_list
+        self.org_info = org_dict
+        self.last_sync = datetime.now()
+
 class DataManager:
     @staticmethod
     def load_tb(file_path):
@@ -41,7 +58,7 @@ class DataManager:
                     'Ledger Name': str(row[name_col]).strip(),
                     'Amount_CY': DataManager._safe_float(row[cy_col]) if cy_col else 0,
                     'Amount_PY': DataManager._safe_float(row[py_col]) if py_col else 0,
-                    'Group_Head': '', 'Sub_Group': '', 'L3_Group': '', 'Fund_Type': 'General'
+                    'Group_Head': '', 'Sub_Group': '', 'L3_Group': '', 'Fund_Type': 'General', 'Source': 'Local'
                 }
                 # Auto-Map
                 for c in df.columns:
@@ -54,110 +71,56 @@ class DataManager:
                         row_data['Fund_Type'] = str(row[c]).strip()
                 processed_data.append(row_data)
             
-            # Create data integrity hash
-            data_hash = DataManager._create_data_hash(processed_data)
-            
             return processed_data, None
         except Exception as e: 
             return None, f"Error loading file: {str(e)}"
 
     @staticmethod
+    def calculate_wdv_depreciation(ppe_records):
+        """Automated Depreciation Engine using Income Tax Act rates"""
+        from npo_config import DEPRECIATION_RATES
+        for record in ppe_records:
+            asset_name = str(record.get('Asset Name', ''))
+            # Auto-detect rate from name or config
+            rate = 0.15 # Default
+            for category, r in DEPRECIATION_RATES.items():
+                if category.lower() in asset_name.lower():
+                    rate = r
+                    break
+            
+            opening = DataManager._safe_float(record.get('Gross_Op', 0))
+            additions = DataManager._safe_float(record.get('Additions', 0))
+            deletions = DataManager._safe_float(record.get('Deletions', 0))
+            
+            # WDV Calculation: (Opening + Additions - Deletions) * Rate
+            record['Dep_Year'] = round((opening + additions - deletions) * rate, 2)
+        return ppe_records
+
+    @staticmethod
     def _safe_float(value):
-        """Safely convert to float"""
         try:
-            if pd.isna(value):
-                return 0.0
-            if isinstance(value, str):
-                value = value.replace(',', '').strip()
+            if pd.isna(value): return 0.0
+            if isinstance(value, str): value = value.replace(',', '').strip()
             return float(value)
-        except:
-            return 0.0
+        except: return 0.0
 
     @staticmethod
     def _validate_dataframe(df, name_col, cy_col, py_col):
-        """Validate DataFrame structure and data"""
-        errors = []
-        
-        # Check for empty dataframe
-        if df.empty:
-            return False, "File is empty"
-        
-        # Check required columns
-        if name_col not in df.columns:
-            errors.append(f"Column '{name_col}' not found")
-        if cy_col not in df.columns:
-            errors.append(f"Column '{cy_col}' not found")
-        
-        # Check for duplicate ledger names
-        duplicates = df[name_col][df[name_col].duplicated()].tolist()
-        if duplicates:
-            errors.append(f"Duplicate ledger names: {duplicates[:5]}")
-        
-        # Check for invalid amounts
-        invalid_cy = df[cy_col][~pd.to_numeric(df[cy_col], errors='coerce').notna()].index.tolist()
-        if invalid_cy:
-            errors.append(f"Invalid current year amounts at rows: {invalid_cy[:5]}")
-        
-        if py_col:
-            invalid_py = df[py_col][~pd.to_numeric(df[py_col], errors='coerce').notna()].index.tolist()
-            if invalid_py:
-                errors.append(f"Invalid previous year amounts at rows: {invalid_py[:5]}")
-        
-        if errors:
-            return False, " | ".join(errors[:3])  # Return first 3 errors
-        
+        if df.empty: return False, "File is empty"
+        if name_col not in df.columns: return False, f"Column '{name_col}' not found"
         return True, "Valid"
 
     @staticmethod
-    def _create_data_hash(data):
-        """Create hash for data integrity"""
-        hash_data = {
-            'records': len(data),
-            'total_cy': sum(row['Amount_CY'] for row in data),
-            'total_py': sum(row['Amount_PY'] for row in data),
-            'timestamp': datetime.now().isoformat()
-        }
-        hash_input = json.dumps(hash_data, sort_keys=True)
-        return hashlib.sha256(hash_input.encode()).hexdigest()
-
-    @staticmethod
     def validate_tb_data(data):
-        """Validate trial balance data structure"""
         required_fields = ['Ledger Name', 'Amount_CY', 'Group_Head']
-        
         for i, row in enumerate(data):
-            # Check required fields
             for field in required_fields:
-                if field not in row or not row[field]:
+                if field not in row or not str(row[field]).strip():
                     return False, f"Row {i+1}: Missing '{field}'"
-            
-            # Validate amount formats
-            try:
-                cy = float(row['Amount_CY'])
-                if cy < 0:
-                    return False, f"Row {i+1}: Negative amount not allowed"
-            except ValueError:
-                return False, f"Row {i+1}: Invalid amount format for CY"
-            
-            if 'Amount_PY' in row and row['Amount_PY']:
-                try:
-                    float(row['Amount_PY'])
-                except ValueError:
-                    return False, f"Row {i+1}: Invalid amount format for PY"
-        
-        return True, "Data validation successful"
-
-    @staticmethod
-    def prepare_unit_data(data, unit_name):
-        """Prepare data for specific unit"""
-        if unit_name == "Consolidated":
-            return data
-        else:
-            return [row for row in data if row.get('Unit') == unit_name]
+        return True, "Success"
 
     @staticmethod
     def analyze_data_quality(data):
-        """Analyze data quality metrics"""
         metrics = {
             'total_records': len(data),
             'records_with_cy': sum(1 for r in data if r.get('Amount_CY', 0) != 0),

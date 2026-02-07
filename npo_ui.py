@@ -2,6 +2,7 @@
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, scrolledtext
 import threading
+from datetime import datetime
 from npo_config import *
 from npo_data import DataManager
 from npo_excel import ExcelGenerator
@@ -43,10 +44,10 @@ class NPOApp:
         self.setup_org_tab()
         self.setup_mapping_tab()
         self.setup_schedules_tab()
-        self.setup_unit_analysis_tab()  # NEW
-        self.setup_compliance_tab()     # NEW
+        self.setup_unit_analysis_tab()
+        self.setup_compliance_tab()
         self.setup_10b_tab()
-        self.setup_templates_tab()      # NEW
+        self.setup_templates_tab()
         self.setup_policies_tab()
         
         # Footer
@@ -452,6 +453,92 @@ class NPOApp:
         
         tk.Label(frame, text=f"\nData Quality Score: {quality_score:.1f}% ({status})", 
                 fg=color, font=("Segoe UI", 10, "bold")).pack(pady=10)
+
+    def get_unit_list(self):
+        """Get list of units from organization data"""
+        units_str = self.org_vars.get('Units', '').get() if self.org_vars.get('Units') else "Main Unit"
+        units = [u.strip() for u in units_str.split(',') if u.strip()]
+        
+        # Always include "Consolidated" and "Main Unit"
+        all_units = ["Consolidated"]
+        all_units.extend(units)
+        
+        # Remove duplicates while preserving order
+        seen = set()
+        unique_units = []
+        for unit in all_units:
+            if unit not in seen:
+                seen.add(unit)
+                unique_units.append(unit)
+        
+        return unique_units
+
+    def update_units(self):
+        """Update unit dropdowns with current unit list"""
+        units = self.get_unit_list()
+        
+        # Update unit dropdown in mapping tab
+        self.cmb_unit['values'] = units
+        
+        # Update unit analysis tab dropdown
+        if hasattr(self, 'unit_analysis_cmb'):
+            self.unit_analysis_cmb['values'] = [u for u in units if u != "Consolidated"]
+
+    def load_csv(self):
+        """Load trial balance from CSV file"""
+        filename = filedialog.askopenfilename(
+            filetypes=[("CSV files", "*.csv"), ("Excel files", "*.xlsx"), ("All files", "*.*")]
+        )
+        
+        if not filename:
+            return
+        
+        try:
+            # Use DataManager to load and validate data
+            data, error = DataManager.load_tb(filename)
+            
+            if error:
+                messagebox.showerror("Load Error", error)
+                return
+            
+            if not data:
+                messagebox.showwarning("Warning", "No data found in file")
+                return
+            
+            # Clear existing rows
+            self.clear_mapping()
+            
+            # Add new rows
+            for item in data:
+                self.add_map_row(item)
+            
+            # Update units from loaded data
+            units = set(row.get('Unit', 'Main Unit') for row in data)
+            units_str = ', '.join(units)
+            if 'Units' in self.org_vars:
+                self.org_vars['Units'].delete(0, tk.END)
+                self.org_vars['Units'].insert(0, units_str)
+            
+            # Refresh unit dropdowns
+            self.update_units()
+            
+            # Log the activity
+            self.audit_logger.log_generation(
+                self.org_vars.get('Name', tk.StringVar(value='Unknown')).get(),
+                filename,
+                {'rows_loaded': len(data)}
+            )
+            
+            self.activity_tracker.track_activity('load_csv', {
+                'filename': filename,
+                'rows': len(data)
+            })
+            
+            messagebox.showinfo("Success", f"Loaded {len(data)} records from {filename}")
+            
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load file: {str(e)}")
+            self.audit_logger.log_error("file_load", str(e), {'filename': filename})
 
     def setup_unit_analysis_tab(self):
         """New tab for unit-wise analysis"""
@@ -954,65 +1041,6 @@ class NPOApp:
             else:
                 messagebox.showerror("Error", message)
 
-    # Other methods (setup_schedules_tab, setup_10b_tab, setup_policies_tab,
-    # get_unit_list, update_units, load_csv, validate, etc.) remain similar
-    # but should include the enhanced validation and data handling
-
-    def validate(self):
-        """Validate the trial balance"""
-        try:
-            data = self.collect_mapping_data(self.unit_var.get())
-            
-            # Validate data structure
-            is_valid, message = DataManager.validate_tb_data(data)
-            if not is_valid:
-                messagebox.showerror("Validation Error", message)
-                return
-            
-            # Perform accounting validation
-            assets, liab, inc, exp = 0, 0, 0, 0
-            u = self.unit_var.get()
-            
-            for r in data:
-                try:
-                    v = float(r.get('Amount_CY', 0))
-                    g = r.get('Group_Head', '')
-                    
-                    if g in BS_ASSETS: assets += v
-                    elif g in BS_LIABILITIES: liab += v
-                    elif g in PL_INCOME: inc += v
-                    elif g in PL_EXPENSE: exp += v
-                except ValueError:
-                    pass
-            
-            diff = assets - (liab + (inc - exp))
-            
-            if abs(diff) < 1:
-                self.lbl_valid.config(text="✅ VALIDATED", bg="#2ECC71")
-                self.is_validated = True
-                self.btn_gen.config(state="normal", bg="#28a745")
-                
-                # Log successful validation
-                self.audit_logger.log_validation(
-                    self.current_data_hash,
-                    (True, "Validation successful"),
-                    self.unit_var.get()
-                )
-                
-                messagebox.showinfo("Success", "Validation Successful!")
-            else:
-                self.lbl_valid.config(text=f"❌ DIFF: {diff:,.2f}", bg="#E74C3C")
-                self.is_validated = False
-                self.btn_gen.config(state="disabled", bg="#95a5a6")
-                messagebox.showwarning("Error", 
-                                      f"Balance Sheet not matched.\nDiff: ₹{diff:,.2f}")
-                
-        except Exception as e:
-            messagebox.showerror("Validation Error", str(e))
-            self.audit_logger.log_error("validation", str(e), None)
-
-    # Add these methods that were referenced but not defined in the original
-
     def setup_schedules_tab(self):
         f = ttk.Frame(self.notebook); self.notebook.add(f, text=" 📅 Schedules ")
         # PPE
@@ -1176,3 +1204,56 @@ class NPOApp:
                 self.calc_tree.insert('', 'end', values=(r[0], f"₹{r[1]:,.2f}"))
             else:
                 self.calc_tree.insert('', 'end', values=(r[0], r[1]))
+
+    def validate(self):
+        """Validate the trial balance"""
+        try:
+            data = self.collect_mapping_data(self.unit_var.get())
+            
+            # Validate data structure
+            is_valid, message = DataManager.validate_tb_data(data)
+            if not is_valid:
+                messagebox.showerror("Validation Error", message)
+                return
+            
+            # Perform accounting validation
+            assets, liab, inc, exp = 0, 0, 0, 0
+            u = self.unit_var.get()
+            
+            for r in data:
+                try:
+                    v = float(r.get('Amount_CY', 0))
+                    g = r.get('Group_Head', '')
+                    
+                    if g in BS_ASSETS: assets += v
+                    elif g in BS_LIABILITIES: liab += v
+                    elif g in PL_INCOME: inc += v
+                    elif g in PL_EXPENSE: exp += v
+                except ValueError:
+                    pass
+            
+            diff = assets - (liab + (inc - exp))
+            
+            if abs(diff) < 1:
+                self.lbl_valid.config(text="✅ VALIDATED", bg="#2ECC71")
+                self.is_validated = True
+                self.btn_gen.config(state="normal", bg="#28a745")
+                
+                # Log successful validation
+                self.audit_logger.log_validation(
+                    self.current_data_hash,
+                    (True, "Validation successful"),
+                    self.unit_var.get()
+                )
+                
+                messagebox.showinfo("Success", "Validation Successful!")
+            else:
+                self.lbl_valid.config(text=f"❌ DIFF: {diff:,.2f}", bg="#E74C3C")
+                self.is_validated = False
+                self.btn_gen.config(state="disabled", bg="#95a5a6")
+                messagebox.showwarning("Error", 
+                                      f"Balance Sheet not matched.\nDiff: ₹{diff:,.2f}")
+                
+        except Exception as e:
+            messagebox.showerror("Validation Error", str(e))
+            self.audit_logger.log_error("validation", str(e), None)

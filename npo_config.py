@@ -7,7 +7,17 @@ from datetime import datetime
 # ==========================================
 
 APP_NAME = "RB Smart FS"
-VERSION = "13.0"
+VERSION = "13.1"
+
+# --- AUTOMATED DEPRECIATION RATES (Income Tax Act) ---
+DEPRECIATION_RATES = {
+    'Immovable Properties': 0.10,
+    'Movable Properties': 0.15,
+    'Vehicles': 0.15,
+    'Furniture': 0.10,
+    'Computers': 0.40,
+    'Intangible Assets': 0.25
+}
 
 # --- GROUPS ---
 BS_ASSETS = [
@@ -37,11 +47,12 @@ PL_EXPENSE = [
 
 ALL_GROUPS = sorted(BS_LIABILITIES + BS_ASSETS + PL_INCOME + PL_EXPENSE)
 FUND_TYPES = ['General', 'Designated', 'Restricted', 'Corpus']
+SOURCE_TYPES = ['Local', 'FCRA']
 
 SUB_GROUP_MAPPING = {
     'Long Term Borrowings': ['Secured', 'Unsecured', 'From Trustees', 'From Banks'],
     'Cash and Bank Balances': ['Cash on Hand', 'Savings Bank', 'Current Account', 'Fixed Deposits'],
-    'Property, Plant & Equipment': ['Immovable Properties', 'Movable Properties', 'Vehicles', 'Furniture'],
+    'Property, Plant & Equipment': ['Immovable Properties', 'Movable Properties', 'Vehicles', 'Furniture', 'Computers'],
     'Donations and Grants': ['Cash Donations', 'Grant-in-Aid', 'Corporate Donations', 'Foreign Donations'],
     'Programme Expenses': ['Scholarships', 'Medical Aid', 'Relief Work', 'Education Programs'],
 }
@@ -172,7 +183,6 @@ COMPLIANCE_CHECKLISTS = {
 }
 
 def save_config(config_data, filename='npo_config_backup.json'):
-    """Save configuration to file"""
     try:
         with open(filename, 'w') as f:
             json.dump({
@@ -184,7 +194,6 @@ def save_config(config_data, filename='npo_config_backup.json'):
         return False, str(e)
 
 def load_config(filename='npo_config_backup.json'):
-    """Load configuration from file"""
     try:
         with open(filename, 'r') as f:
             data = json.load(f)

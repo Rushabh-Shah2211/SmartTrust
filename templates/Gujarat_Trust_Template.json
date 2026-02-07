@@ -1,0 +1,15 @@
+{
+  "name": "Gujarat Trust Template",
+  "created_at": "2026-02-07T13:33:25.375644",
+  "is_default": true,
+  "config": {
+    "groups": "gujarat",
+    "color_theme": "Professional (Gray)",
+    "include_gujarat": true,
+    "include_ica": false
+  },
+  "organization": {
+    "type": "Public Trust",
+    "category": "Charitable"
+  }
+}
